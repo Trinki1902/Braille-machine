@@ -1,0 +1,1039 @@
+//maquina TEXTO-BRAILLE
+
+#include <Servo.h>                                                          //referente a los SERVOMOTORES
+Servo servo1;
+Servo servo2;
+Servo servo3;
+Servo servo4;
+Servo servo5;
+Servo servo6;
+
+int PINSERVO1 = 10;
+int PINSERVO2 = 9;
+int PINSERVO3 = 8;
+int PINSERVO4 = 7;
+int PINSERVO5 = 6;
+int PINSERVO6 = 5;
+
+//Para emitir sonido al pulsar los botones
+int sonido = 16;
+
+//Relativo a la posicion de todos los sevos en todo momento
+//Definimos las variables enteras con "volatile" para poder modificar su valor dentro de las funciones (movServos)
+volatile int posA = 0;
+volatile int posB = 0;
+volatile int posC = 0;
+volatile int posD = 0;
+volatile int posE = 0;
+volatile int posF = 0;
+
+//relativo al movimiento de los servos
+int tiempoMinimo= 2000;                         //no poner menos de 100 y aconsejable no bajar de 200
+volatile int espera = tiempoMinimo;                // el el codigo de texto a braille se emplea la palabra "espera" que es lo mismo que tiempo minimo
+int pos = 0;
+//realizamos varias pruebas para ver cuales son los ángulos que mejor se ajustan al funcionamiento deseado
+int anguloMax = 48;   // en mi caso, con 48º de maximo se comporta bien
+int anguloMin = 23;   // en mi caso, con 23º de minimo se comporta bien
+volatile float paso = 2;              //a mayor paso, mayor velocidad del servo. También implica más ruído ,por lo que hay que buscar un equilibrio
+volatile int modoVelocidad = 2;                                // no poner mas de 12.5 que es la maxima velocidad, aconsejable no subir de 5
+
+
+#include <SPI.h>                                                      //referente al lector micro SD
+#include <SD.h>
+File myFile;
+String nombreArchivo = "";
+/*
+#include <SoftwareSerial.h>                                           //relativo al reproductor MP3 para los auriculares
+#include <DFPlayer_Mini_Mp3.h>
+*/
+int pulsador1 = 15;      //conectaremos los botones a los pines analogicos de arduino,empleandolos como digitales.
+int pulsador2 = 14;
+int pulsadorPausa = 17;
+volatile bool modoPausa = 0;    //podemos modificar su estado dentro de la funcion pausa
+
+int marca = 0;       //cosas del bucle 
+int lectura = 0;
+
+//definimos en que posicion de la tarjeta microSD del reproductor MP3 se encuentra cada grabacion
+int reproducir_a = 0;
+int reproducir_b = 1;
+
+void setup() {
+  // put your setup code here, to run once:
+/*
+  mp3_set_serial (Serial);                                              //inicializamos el reproductor mp3 a un cierto volumen                     
+  mp3_set_volume (30);
+  mp3_play (0);
+  delay(1000);
+*/
+
+  // Open serial communications and wait for port to open:
+  Serial.begin(9600);  //inicializamos el lector micro SD
+
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB port only
+  }
+  Serial.print("Initializing SD card...");
+  if (!SD.begin(4)) {
+    Serial.println("initialization failed!");
+    while (1);
+  }
+  Serial.println("initialization done.");
+
+
+  servo1.attach(PINSERVO1);                                                                        //SERVOMOTORES
+  servo2.attach(PINSERVO2);
+  servo3.attach(PINSERVO3);
+  servo4.attach(PINSERVO4);
+  servo5.attach(PINSERVO5);
+  servo6.attach(PINSERVO6);
+
+    //Comenzamos el prpgrama con los servos en su posicion mas baja
+    servosInicio();
+    
+ 
+
+   //inicializamos los pines que recibiran las informacion de los pulsadores:
+  pinMode(pulsador1,INPUT);
+  pinMode(pulsador2,INPUT);
+  pinMode(pulsadorPausa,INPUT); 
+  pinMode(sonido,OUTPUT);
+ 
+}
+
+void loop() {
+//opcion para extraer el texto a traducir a traver de un atargeta micro SD
+myFile = SD.open(eleccionArchivoLectura());           //introducimos el nombre del archivo que queremos leer
+  if (myFile) {
+    Serial.println("Se ha conseguido entrar en el archivo para su lectura");
+    //leemos el contenido del archivo abierto hasta que no queda nada en el
+    while (myFile.available()) {
+      pausa();                         //esta rutina unicamente se ejecutará si pulsamos el boton de pausa
+      actualizarVelocidad();
+      lectura = myFile.read();  
+      Serial.write(lectura);        //imprimimos el codigo en forma de letra                              
+      elegirLetra(lectura);
+      //empleamos la letra leida para proyectar la letra en braille equivalente
+      //Serial.println("");   //realizamos en salto de linea
+      delay(espera);                        //retardo entre las lecturas de cada letra      
+    }
+    // close the file:
+    myFile.close();
+  }  
+}
+
+
+
+//funcion a la que le meteremos la posicion a la que se deben mover los 6 servos y ejecutará la accion
+void movServos(int a, int b,int c,int d,int e,int f){
+  //invertimos el sentido de giro del servo 1 y 5 y 6 ya que estos dos giran en sentido contrario
+
+  int k[6] = {!a,b,c,d,!e,!f};
+  int v[7] = {posA,posB,posC,posD,posE,posF,-1};
+  for (pos = 0; pos < anguloMax; pos+= paso){
+    for (int i = 0;v[i] != -1;i++){
+      // dependiendo si el servo debe subir o bajar, sumamos o restamos la posicion
+      if (k[i] == 1){
+        v[i] += paso;
+      }
+      if (k[i] == 0){
+        v[i] -= paso;
+      }
+
+      //para que nunca se proyecte un angulo mayor de 60º ni menor de 0º
+      if (v[i] >= anguloMax){
+        v[i] = anguloMax;
+      }
+      if (v[i] <= anguloMin){
+        v[i] = anguloMin;
+      }
+      
+    }
+    //proyectamos las posiciones de los servos
+    servo1.write(v[0]);
+    servo2.write(v[1]);
+    servo3.write(v[2]);
+    servo4.write(v[3]);
+    servo5.write(v[4]);
+    servo6.write(v[5]);
+    delay(15);
+    //para que los valores de las posiciones queden guardados :
+    posA = v[0];
+    posB = v[1];
+    posC = v[2];
+    posD = v[3];
+    posE = v[4];
+    posF = v[5];
+    
+  }
+}
+
+
+void servosInicio(){
+  paso = 10;           //aumentamos el paso unicamente para la rutina de encendido
+      int delayInicio = 50;
+  for (int i = 0;i < 3; i++){
+
+    movServos(1,0,0,0,0,0);
+    delay(delayInicio);
+    movServos(0,1,0,0,0,0);
+    delay(delayInicio);
+    movServos(0,0,1,0,0,0);
+    delay(delayInicio);
+    movServos(0,0,0,0,0,1);
+    delay(delayInicio);
+    movServos(0,0,0,0,1,0);
+    delay(delayInicio);
+    movServos(0,0,0,1,0,0);
+    delay(delayInicio);
+    delay(20);
+  }
+  movServos(0,0,0,0,0,0);
+  paso = 2;                //disminuimos el paso para el uso normal
+}
+
+
+
+//RUTINA QUE UNICAMENTE SE EJECUTARÁ SI PULSAMOS EL BOTON DE PAUSA
+void pausa(){
+  if (digitalRead(pulsadorPausa) == HIGH) {
+    // ESPERAMOS ANTES DE COMPROBAR NUEVAMENTE
+    delay(50);
+    if (digitalRead(pulsadorPausa) == HIGH ) {
+      // ENTONCES ENCENDEMOS EL LED
+      Serial.println("");
+      Serial.println("PAUSA");
+      modoPausa = 1;
+      digitalWrite(sonido,HIGH);           //combinacion de sonido especifico para marcha y parar
+      delay(70); 
+      digitalWrite(sonido,LOW);
+      delay(70);
+      digitalWrite(sonido,HIGH);
+      delay(70); 
+      digitalWrite(sonido,LOW);
+      delay(200);  
+    }
+  }
+  while (modoPausa == 1){
+    //comprobamos a ver si se a pulsado el pulsador de pausa para reanudar la lectura
+    if (digitalRead(pulsadorPausa) == HIGH) {
+      // ESPERAMOS ANTES DE COMPROBAR NUEVAMENTE
+      delay(50);
+      if (digitalRead(pulsadorPausa) == HIGH ) {
+        // ENTONCES ENCENDEMOS EL LED
+        Serial.println("REANUDAR lectura");
+        modoPausa = 0;
+        digitalWrite(sonido,HIGH);           //combinacion de sonido especifico para marcha y parar
+        delay(70); 
+        digitalWrite(sonido,LOW);
+        delay(70);
+        digitalWrite(sonido,HIGH);
+        delay(70); 
+        digitalWrite(sonido,LOW);
+        delay(200);  
+      }
+    }
+    //Introducimos un delay para que solo se compruebe cada cierto tiempo
+    delay(500);
+   //en el caso de que modoPausa = 0 ya podremos salir del while y reanudaremos la lectura 
+  }  
+}
+  
+
+  
+
+//funcion para actualizar en marcha la velocidad de lectura
+void actualizarVelocidad(){
+  if (modoVelocidad < 10){
+    if (digitalRead(pulsador1) == HIGH) {
+      // ESPERAMOS ANTES DE COMPROBAR NUEVAMENTE
+      delay(50);
+      if (digitalRead(pulsador1) == HIGH ) {
+        //cada vez que aumentemos la velocidad, aumentaremos el paso y reduciremos el tiempo de espera
+        digitalWrite(sonido,HIGH);     //PARA SABER QUE SE HA AUMENTADO LA VELOCIDAD
+        modoVelocidad += 1;
+        if (modoVelocidad < 5){
+          paso = 2;
+          espera -= 211;
+        }
+        if(modoVelocidad >= 5){
+          paso = 5;
+          espera -= 211;
+        }
+        Serial.println("");
+        Serial.print("AUMENTAMOS la velocidad de lectura a: ");
+        Serial.println(modoVelocidad);
+        delay(100);
+        digitalWrite(sonido,LOW);                 
+      }
+    }
+  }
+
+  //realizamos la misma rutina pero para disminuir la velocidad de lectura
+  if (paso > 1){
+   if (digitalRead(pulsador2) == HIGH) {
+    // ESPERAMOS ANTES DE COMPROBAR NUEVAMENTE
+    delay(50);
+    if (digitalRead(pulsador2) == HIGH ) {
+      //cada vez que aumentemos la velocidad, aumentaremos el paso y reduciremos el tiempo de espera
+      digitalWrite(sonido,HIGH);
+      modoVelocidad -= 1;
+      if (modoVelocidad < 5){
+          paso = 2;
+          espera += 211;
+        }
+        if(modoVelocidad >= 5){
+          paso = 5;
+          espera += 211;
+        }
+      paso -= 1;
+      espera += 211;
+      Serial.println("");
+      Serial.print("DISMINUIMOS la velocidad de lectura a ");
+      Serial.println(paso);
+      delay(100);  
+      digitalWrite(sonido,LOW);               
+     }
+   }
+  }
+}
+//FUNCION PARA ELEGIR LA PISTA QUE QUEREMOS SELECCIONAR
+String eleccionArchivoLectura(){
+  Serial.println("");
+  Serial.println("Pulse el PULSADOR 1  para seleccionar la pista que quiera reproducir. (cuando haya finalizado pulse el PULSADOR 2)");
+  String nombreArchivo = "";
+  int contador = 0;         //dependiendo del valor final de este contador escogeremos un archivo o otro
+  bool finalizarDecision = 0;
+  //comenzaremos eligiendo la pista de la targeta microSD que queramos leer(lo elegiremos con 1 boton para pasar y otro para aceptar
+  while (finalizarDecision == 0){
+    if (digitalRead(pulsador1) == HIGH) {
+    // ESPERAMOS ANTES DE COMPROBAR NUEVAMENTE
+    delay(50);
+    if (digitalRead(pulsador1) == HIGH ) {
+      // ENTONCES ENCENDEMOS EL LED
+      digitalWrite(sonido,HIGH);
+      contador+= 1;                //INCREMENTAMOS EL VALOR DEL CONTADOR
+      if (contador > 10){     //para poder volver a la pista numero 1 si queremos
+        contador = 1;
+      }
+      nombreArchivo = nombrePistaElegida(contador);
+      Serial.print("Texto a leer:  ");
+      Serial.println(nombreArchivo);
+      delay(20);                                //delay para evitar que se realicen demasiadas cuentas seguidas por si se tarda en levantar el dedo del pulsador
+      digitalWrite(sonido,LOW);
+      delay(20);
+      
+    }
+  }
+  //Verificamos si está pulsado el pulsador 2 con el objetivo seleccionar la pista que marca el contador
+    if (digitalRead(pulsador2) == HIGH){
+      delay(50);
+      if (digitalRead(pulsador2) == HIGH ) {
+        // ENTONCES ENCENDEMOS EL LED
+        digitalWrite(sonido,HIGH);
+        //Serial.print("Se repoducirá la pista ");
+        //Serial.println(contador);
+        finalizarDecision = 1; //Implica que ya podemos salir del bucle while , por lo que ya hemos elegido la pista que vamos a leer
+        delay(400);                                //delay para evitar que se realicen demasiadas cuentas seguidas por si se tarda en levantar el dedo del pulsador
+        digitalWrite(sonido,LOW);
+      }
+    }
+  }
+  //Dependiendo del valor del pulsador, elegiremos una pista u otra
+  //nombreArchivo = nombrePistaElegida(contador);
+  //podemos crear todas las pistas que queramos pero creo que para probar ya son suficientes 
+  Serial.print("El nombre de la pista que se reproducirá es: ");
+  Serial.println(nombreArchivo);
+  return nombreArchivo;
+}
+
+String nombrePistaElegida(int contador){                //esta función nos devuelve el nombre de la pista elegida
+  if (contador == 1){
+    nombreArchivo = "ALFABETO.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 2){
+    nombreArchivo = "PISTA1.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 3){
+    nombreArchivo = "PISTA2.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 4){
+    nombreArchivo = "PISTA3.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 5){
+    nombreArchivo = "PISTA4.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 6){
+    nombreArchivo = "PISTA5.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 7){
+    nombreArchivo = "PISTA6.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 8){
+    nombreArchivo = "PISTA7.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 9){
+    nombreArchivo = "PISTA8.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+   if (contador == 10){
+    nombreArchivo = "PISTA9.TXT";                    //se abrirá la pista que tenga este nombre
+  }
+  return nombreArchivo;
+}
+
+
+//definimos todas las funciones relativas al paso de TEXTO-BRAILLE
+
+                                //DEFINIMOS TODAS LAS LETRAS, SIMBOLOS Y NUMEROS
+int activar(int a,int b,int c,int d,int e,int f) {
+  movServos(a,b,c,d,e,f);                       //con los valores correspondientes activamos los servos
+}
+
+
+
+//para algunas situaciones nos interesa dejas una cuadrado vacío , lo simbolizaremos de la siguiente forma
+void espacio(){
+  activar(0,0,0,0,0,0);
+}
+            //LETRAS
+//Para distinguir mayusculas de minúsculas emplearemos el identificador de mayusculas colocándolo delante de las letras
+void identificadorMayusculas(){
+  activar(0,0,0,1,0,1);
+}
+void negrita(){              //para escribir las letras con negrita
+  activar(0,0,0,1,1,0);
+}
+void numero(){
+  activar(0,0,1,1,1,1);
+}
+
+
+void a(){
+  /*
+  mp3_play (reproducir_a);
+  delay(500);
+  */
+  activar(1,0,0,0,0,0);
+}
+void b(){
+  /*
+  mp3_play (reproducir_b);
+  delay(500);
+  */
+  activar(1,1,0,0,0,0);
+}
+void c(){
+  activar(1,0,0,1,0,0);
+}
+void d(){
+  activar(1,0,0,1,1,0);
+}
+void e(){
+  activar(1,0,0,0,1,0);
+}
+void f(){
+  activar(1,1,0,1,0,0);
+}
+void g(){
+  activar(1,1,0,1,1,0);
+}
+void h(){
+  activar(1,1,0,0,1,0);
+}
+void i(){
+  activar(0,1,0,1,0,0);
+}
+void j(){
+  activar(0,1,0,1,1,0);
+}
+void k(){
+  activar(1,0,1,0,0,0);
+}
+void l(){
+  activar(1,1,1,0,0,0);
+}
+void m(){
+  activar(1,0,1,1,0,0);
+}
+void n(){
+  activar(1,0,1,1,1,0);
+}
+void n_(){
+  activar(1,1,0,1,1,1);
+}
+void o(){
+  activar(1,0,1,0,1,0);
+}
+void p(){
+  activar(1,1,1,1,0,0);
+}
+void q(){
+  activar(1,1,1,1,1,0);
+}
+void r(){
+  activar(1,1,1,0,1,0);
+}
+void s(){
+  activar(0,1,1,1,0,0);
+}
+void t(){
+  activar(0,1,1,1,1,0);
+}
+void u(){
+  activar(1,0,1,0,0,1);
+}
+void v(){
+  activar(1,1,1,0,0,1);
+}
+void w(){
+  activar(0,1,0,1,1,1);
+}
+void x(){
+  activar(1,0,1,1,0,1);
+}
+void y(){
+  activar(1,0,1,1,1,1);
+}
+void z(){
+  activar(1,0,1,0,1,1);
+}
+
+
+
+
+    //SIGNOS
+void punto(){
+  activar(0,0,1,0,0,0);
+}
+void coma(){
+  activar(0,1,0,0,0,0);
+}
+void puntoComa(){
+  activar(0,1,1,0,0,0);
+}
+void dosPuntos(){
+  activar(0,1,0,1,0,0);
+}
+void guion(){
+  activar(0,0,1,0,0,1);
+}
+void exclamacion(){
+  activar(0,1,1,0,1,0);
+}
+void interrogacion(){
+  activar(0,1,0,0,0,1);
+}
+void abrirParentesis(){
+  activar(1,1,0,0,0,1);
+}
+void cerrarParentesis(){
+  activar(0,0,1,1,1,0);
+}
+void signoMas(){
+  activar(0,1,1,0,1,0);
+}
+void signoMultiplicacion(){                   //es igual que el signo de comillas
+  activar(0,1,1,0,0,1);
+} 
+void signoIgual(){
+  activar(0,1,1,0,1,1);
+}
+void signoDivision(){
+  activar(0,1,0,0,1,1);
+}
+void signoMenos(){                     //igual que el signo de guion, no se cual es la diferencia
+  activar(0,0,1,0,0,1);
+}
+
+void comillas(){
+  activar(0,1,1,0,0,1);
+}
+void comillasInteriores(){
+  activar(0,0,0,0,0,1);
+  delay(espera);
+  activar(0,1,1,0,0,1);
+}
+
+void abrirCorchetes(){
+  activar(1,1,1,0,1,1);
+}
+void cerrarCorchetes(){
+  activar(0,1,1,1,1,1);
+}
+void abrirLlave(){
+  activar(0,0,0,0,1,0);
+  delay(espera);
+  activar(1,1,1,0,0,0);
+}
+void cerrarLlave(){
+  activar(0,0,0,1,1,1);
+  delay(espera);
+  activar(0,1,0,0,0,0);
+}
+void rayaDialogo(){
+  activar(0,0,1,0,0,1);
+  delay(espera);
+  activar(0,0,1,0,0,1);
+}
+void asterisco(){
+  activar(0,0,1,0,1,0);
+}
+void apostrofo(){
+  activar(0,0,1,0,0,0);
+}
+void barraDiagonal(){
+  activar(0,0,0,0,0,1);
+  delay(espera);
+  activar(0,1,0,0,0,0);
+}
+void barraInversa(){
+  activar(0,0,0,0,1,0);
+  delay(espera);
+  activar(0,0,1,0,0,0);
+}
+void dobleBarraDiagonal(){
+  activar(0,0,0,0,0,1);
+  delay(espera);
+  activar(0,1,0,0,0,1);
+  delay(espera);
+  activar(0,1,0,0,0,0);
+}
+void dobleBarraInversa(){
+  activar(0,0,0,0,1,0);
+  delay(espera);
+  activar(0,0,1,0,1,0);
+  delay(espera);
+  activar(0,0,1,0,0,0);
+} 
+void menorQue(){
+  activar(0,0,0,0,1,0);
+  delay(espera);
+  activar(1,0,1,0,0,0);
+}
+void mayorQue(){
+  activar(0,0,0,1,0,1);
+  delay(espera);
+  activar(0,1,0,0,0,0);
+}
+void barraVertical(){
+  activar(0,0,0,1,1,1);
+}
+void barraVerticalDoble(){
+  activar(0,0,0,1,1,1);
+  delay(espera);
+  activar(1,1,1,0,0,0);
+}
+void porcentaje(){
+  activar(0,0,0,1,1,1);
+  delay(espera);
+  activar(0,0,1,0,1,1);
+}
+void almohadilla(){
+  activar(0,0,1,1,1,1);
+  delay(espera);
+  activar(0,0,0,0,1,0);
+}
+void euro(){
+  activar(0,0,0,1,1,1);
+  delay(espera);
+  activar(1,0,0,0,1,0);
+}
+void dolar(){
+  activar(0,0,0,1,1,1);
+  delay(espera);
+  activar(0,1,1,1,0,0);
+}                                              //me falta el @
+
+
+
+
+
+
+      //NUMEROS
+//Antes de colocar cualquier número colocaremos el siguiente identificador que nos indicará que la diguiente distribucion es un numero:
+void identificadorNumero(){
+  activar(0,0,1,1,1,1);
+}
+// numeros( del 0 al 9)
+void cero(){
+  numero();
+  delay(espera);
+  activar(0,1,0,1,1,0);
+}
+void uno(){
+  numero();
+  delay(espera);
+  activar(1,0,0,0,0,0);
+}
+void dos(){
+  numero();
+  delay(espera);
+  activar(1,1,0,0,0,0);
+}
+void tres(){
+  numero();
+  delay(espera);
+  activar(1,0,0,1,0,0);
+}
+void cuatro(){
+  numero();
+  delay(espera);
+  activar(1,0,0,1,1,0);
+}
+void cinco(){
+  numero();
+  delay(espera);
+  activar(1,0,0,0,1,0);
+}
+void seis(){
+  numero();
+  delay(espera);
+  activar(1,1,0,1,0,0);
+}
+void siete(){
+  numero();
+  delay(espera);
+  activar(1,1,0,1,1,0);
+}
+void ocho(){
+  numero();
+  delay(espera);
+  activar(1,1,0,0,1,0);
+}
+void nueve(){
+  numero();
+  delay(espera);
+  activar(0,1,0,1,0,0);
+}
+
+
+
+//creamos la rutina que analiza la letra y ejecuta la funcion correpsondiente
+void elegirLetra(int numeroAscii){
+  if (numeroAscii == 32){
+    espacio();
+  }
+  if (numeroAscii == 33){
+    exclamacion();
+  }
+  if (numeroAscii == 34){
+    comillas();
+  }
+  if (numeroAscii == 35){
+    almohadilla();
+  }
+  if (numeroAscii == 34){
+    comillas();
+  }
+  if (numeroAscii == 36){
+    dolar();
+  }
+  if (numeroAscii == 34){
+    porcentaje();
+  }
+  if (numeroAscii == 40){
+    abrirParentesis();
+  }
+  if (numeroAscii == 41){
+    cerrarParentesis();
+  }
+  if (numeroAscii == 42){
+    asterisco();
+  }
+  if (numeroAscii == 43){
+    signoMas();
+  }
+  if (numeroAscii == 44){
+    coma();
+  }
+  if (numeroAscii == 45){
+    signoMenos();
+  }
+  if (numeroAscii == 46){
+    punto();
+  }
+  if (numeroAscii == 47){
+    barraDiagonal();
+  }
+  if (numeroAscii == 48){
+    cero();
+  }
+  if (numeroAscii == 49){
+    uno();
+  }
+  if (numeroAscii == 50){
+    dos();
+  }
+  if (numeroAscii == 51){
+    tres();
+  }
+  if (numeroAscii == 52){
+    cuatro();
+  }
+  if (numeroAscii == 53){
+    cinco();
+  }
+  if (numeroAscii == 54){
+    seis();
+  }
+  if (numeroAscii == 55){
+    siete();
+  }
+  if (numeroAscii == 56){
+    ocho();
+  }
+  if (numeroAscii == 57){
+    nueve();
+  }
+  if (numeroAscii == 58){
+    dosPuntos();
+  }
+  if (numeroAscii == 59){
+    puntoComa();
+  }
+  if (numeroAscii == 60){
+    menorQue();
+  }
+  if (numeroAscii == 61){
+    signoIgual();
+  }
+  if (numeroAscii == 62){
+    mayorQue();
+  }
+  if (numeroAscii == 63){
+    interrogacion();
+  }
+  if (numeroAscii == 65){
+    identificadorMayusculas();
+    delay(espera);
+    a();
+  }
+  if (numeroAscii == 66){
+    identificadorMayusculas();
+    delay(espera);
+    b();
+  }
+  if (numeroAscii == 67){
+    identificadorMayusculas();
+    delay(espera);
+    c();
+  }
+  if (numeroAscii == 68){
+    identificadorMayusculas();
+    delay(espera);
+    d();
+  }
+  if (numeroAscii == 69){
+    identificadorMayusculas();
+    delay(espera);
+    e();
+  }
+  if (numeroAscii == 70){
+    identificadorMayusculas();
+    delay(espera);
+    f();
+  }
+  if (numeroAscii == 71){
+    identificadorMayusculas();
+    delay(espera);
+    g();
+  }
+  if (numeroAscii == 72){
+    identificadorMayusculas();
+    delay(espera);
+    h();
+  }
+  if (numeroAscii == 73){
+    identificadorMayusculas();
+    delay(espera);
+    i();
+  }
+  if (numeroAscii == 74){
+    identificadorMayusculas();
+    delay(espera);
+    j();
+  }
+  if (numeroAscii == 75){
+    identificadorMayusculas();
+    delay(espera);
+    k();
+  }
+  if (numeroAscii == 76){
+    identificadorMayusculas();
+    delay(espera);
+    l();
+  }
+  if (numeroAscii == 77){
+    identificadorMayusculas();
+    delay(espera);
+    m();
+  }
+  if (numeroAscii == 78){
+    identificadorMayusculas();
+    delay(espera);
+    n();
+  }
+  if (numeroAscii == 79){
+    identificadorMayusculas();
+    delay(espera);
+    o();
+  }
+  if (numeroAscii == 80){
+    identificadorMayusculas();
+    delay(espera);
+    p();
+  }
+  if (numeroAscii == 81){
+    identificadorMayusculas();
+    delay(espera);
+    q();
+  }
+  if (numeroAscii == 82){
+    identificadorMayusculas();
+    delay(espera);
+    r();
+  }
+  if (numeroAscii == 83){
+    identificadorMayusculas();
+    delay(espera);
+    s();
+  }
+  if (numeroAscii == 84){
+    identificadorMayusculas();
+    delay(espera);
+    t();
+  }
+  if (numeroAscii == 85){
+    identificadorMayusculas();
+    delay(espera);
+    u();
+  }
+  if (numeroAscii == 86){
+    identificadorMayusculas();
+    delay(espera);
+    v();
+  }
+  if (numeroAscii == 87){
+    identificadorMayusculas();
+    delay(espera);
+    w();
+  }
+  if (numeroAscii == 88){
+    identificadorMayusculas();
+    delay(espera);
+    x();
+  }
+  if (numeroAscii == 89){
+    identificadorMayusculas();
+    delay(espera);
+    y();
+  }
+  if (numeroAscii == 90){
+    identificadorMayusculas();
+    delay(espera);
+    z();
+  }
+  if (numeroAscii == 91){
+    abrirCorchetes();
+  }
+  if (numeroAscii == 92){
+    barraInversa();
+  }
+  if (numeroAscii == 91){
+    abrirCorchetes();
+  }
+  if (numeroAscii == 93){
+    cerrarCorchetes();
+  }
+  if (numeroAscii == 96){
+    apostrofo();
+  }
+  if (numeroAscii == 97){
+    a();
+  }
+  if (numeroAscii == 98){
+    b();
+  }
+  if (numeroAscii == 99){
+    c();
+  }
+  if (numeroAscii == 100){
+    d();
+  }
+  if (numeroAscii == 101){
+    e();
+  }
+  if (numeroAscii == 102){
+    f();
+  }
+  if (numeroAscii == 103){
+    g();
+  }
+  if (numeroAscii == 104){
+    h();
+  }
+  if (numeroAscii == 105){
+    i();
+  }
+  if (numeroAscii == 106){
+    j();
+  }
+  if (numeroAscii == 107){
+    k();
+  }
+  if (numeroAscii == 108){
+    l();
+  }
+  if (numeroAscii == 109){
+    m();
+  }
+  if (numeroAscii == 110){
+    n();
+  }
+  if (numeroAscii == 164){
+    n_();                        //ESTA LETRA NO ESTÁ EN MUCHOS ABECEDARIOS
+  }
+  if (numeroAscii == 111){
+    o();
+  }
+  if (numeroAscii == 112){
+    p();
+  }
+  if (numeroAscii == 113){
+    q();
+  }
+  if (numeroAscii == 114){
+    r();
+  }
+  if (numeroAscii == 115){
+    s();
+  }
+  if (numeroAscii == 116){
+    t();
+  }
+  if (numeroAscii == 117){
+    u();
+  }
+  if (numeroAscii == 118){
+    v();
+  }
+  if (numeroAscii == 119){
+    w();
+  }
+  if (numeroAscii == 120){
+    x();
+  }
+  if (numeroAscii == 121){
+    y();
+  }
+  if (numeroAscii == 122){
+    z();
+  }
+  if (numeroAscii == 123){
+    abrirCorchetes();
+  }
+  if (numeroAscii == 125){
+    cerrarCorchetes();
+  }
+  
+}
